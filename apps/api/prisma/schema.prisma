@@ -1,0 +1,300 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Users & Authentication
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  passwordHash  String   @map("password_hash")
+  name          String
+  role          UserRole @default(AGENT)
+  permissions   Json     @default("[]")
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relationships
+  assignedConversations Conversation[]
+  assignedLeads        Lead[]
+  leadActivities       LeadActivity[]
+  documentAnalysis     Document[]
+  configUpdates        SystemConfig[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  AGENT
+  ANALYST
+}
+
+// WhatsApp Contacts
+model Contact {
+  id            String   @id @default(uuid())
+  phone         String   @unique
+  name          String?
+  profilePicUrl String?  @map("profile_pic_url")
+  isBusiness    Boolean  @default(false) @map("is_business")
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  // Relationships
+  conversations Conversation[]
+  leads         Lead[]
+
+  @@map("contacts")
+}
+
+// Conversations
+model Conversation {
+  id             String            @id @default(uuid())
+  contactId      String            @map("contact_id")
+  status         ConversationStatus
+  currentState   String            @default("initial") @map("current_state")
+  assignedAgentId String?          @map("assigned_agent_id")
+  context        Json             @default("{}")
+  metadata       Json             @default("{}")
+  startedAt      DateTime         @default(now()) @map("started_at")
+  endedAt        DateTime?        @map("ended_at")
+  createdAt      DateTime         @default(now()) @map("created_at")
+  updatedAt      DateTime         @updatedAt @map("updated_at")
+
+  // Relationships
+  contact        Contact   @relation(fields: [contactId], references: [id])
+  assignedAgent  User?     @relation(fields: [assignedAgentId], references: [id])
+  messages       Message[]
+  leads          Lead[]
+  metrics        ConversationMetric[]
+
+  @@map("conversations")
+}
+
+enum ConversationStatus {
+  ACTIVE
+  PAUSED
+  CLOSED
+  TRANSFERRED
+}
+
+// Messages
+model Message {
+  id                String      @id @default(uuid())
+  conversationId    String      @map("conversation_id")
+  direction         MessageDirection
+  messageType       MessageType @map("message_type")
+  content           String?
+  mediaUrl          String?     @map("media_url")
+  whatsappMessageId String?     @map("whatsapp_message_id")
+  senderType        SenderType  @map("sender_type")
+  senderId          String?     @map("sender_id")
+  isRead            Boolean     @default(false) @map("is_read")
+  deliveredAt       DateTime?   @map("delivered_at")
+  readAt            DateTime?   @map("read_at")
+  createdAt         DateTime    @default(now()) @map("created_at")
+
+  // Relationships
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+  sender       User?        @relation(fields: [senderId], references: [id])
+
+  @@map("messages")
+}
+
+enum MessageDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  DOCUMENT
+  AUDIO
+  VIDEO
+  LOCATION
+  CONTACT
+}
+
+enum SenderType {
+  USER
+  BOT
+  AGENT
+}
+
+// Leads & CRM
+model Lead {
+  id                String            @id @default(uuid())
+  contactId         String            @map("contact_id")
+  conversationId    String?           @map("conversation_id")
+  score             Int               @default(0)
+  classification    LeadClassification @default(COLD)
+  status            LeadStatus        @default(NEW)
+  assignedTo        String?           @map("assigned_to")
+
+  // Lead Information
+  fullName          String?           @map("full_name")
+  email             String?
+  documentNumber    String?           @map("document_number") // CPF/CNPJ
+
+  // Precatório Information
+  precatorioValue   Decimal?          @map("precatorio_value") @db.Decimal(15, 2)
+  precatorioType    String?           @map("precatorio_type")
+  entity            String?           // órgão devedor
+  processNumber     String?           @map("process_number")
+  lawyerName        String?           @map("lawyer_name")
+  hasDocuments      Boolean           @default(false) @map("has_documents")
+  eligibilityStatus EligibilityStatus @default(PENDING_ANALYSIS) @map("eligibility_status")
+
+  // Geographic
+  state             String?
+  city              String?
+
+  // Qualification Data
+  qualificationData Json              @default("{}") @map("qualification_data")
+  notes             String?
+
+  // Pipeline Tracking
+  pipelineStage     String            @default("qualification") @map("pipeline_stage")
+  probability       Int               @default(0) // 0-100
+  expectedCloseDate DateTime?         @map("expected_close_date")
+  dealValue         Decimal?          @map("deal_value") @db.Decimal(15, 2)
+
+  createdAt         DateTime          @default(now()) @map("created_at")
+  updatedAt         DateTime          @updatedAt @map("updated_at")
+
+  // Relationships
+  contact           Contact           @relation(fields: [contactId], references: [id])
+  conversation      Conversation?     @relation(fields: [conversationId], references: [id])
+  assignedUser      User?             @relation(fields: [assignedTo], references: [id])
+  activities        LeadActivity[]
+  documents         Document[]
+
+  @@map("leads")
+}
+
+enum LeadClassification {
+  HOT    // 80-100pts
+  WARM   // 50-79pts
+  COLD   // 20-49pts
+  DISCARD // 0-19pts
+}
+
+enum LeadStatus {
+  NEW
+  QUALIFIED
+  CONTACTED
+  PROPOSAL
+  CLOSED_WON
+  CLOSED_LOST
+}
+
+enum EligibilityStatus {
+  ELIGIBLE
+  INELIGIBLE
+  PENDING_ANALYSIS
+}
+
+// Lead Activities/Timeline
+model LeadActivity {
+  id           String           @id @default(uuid())
+  leadId       String           @map("lead_id")
+  userId       String?          @map("user_id")
+  activityType ActivityType     @map("activity_type")
+  description  String
+  metadata     Json             @default("{}")
+  createdAt    DateTime         @default(now()) @map("created_at")
+
+  // Relationships
+  lead         Lead             @relation(fields: [leadId], references: [id])
+  user         User?            @relation(fields: [userId], references: [id])
+
+  @@map("lead_activities")
+}
+
+enum ActivityType {
+  CALL
+  EMAIL
+  MEETING
+  NOTE
+  STATUS_CHANGE
+  DOCUMENT_UPLOADED
+  SCORE_UPDATED
+}
+
+// Documents
+model Document {
+  id               String           @id @default(uuid())
+  leadId           String           @map("lead_id")
+  filename         String
+  originalFilename String           @map("original_filename")
+  filePath         String           @map("file_path")
+  fileSize         Int?             @map("file_size")
+  mimeType         String?          @map("mime_type")
+  documentType     DocumentType     @map("document_type")
+  analysisStatus   AnalysisStatus   @default(PENDING) @map("analysis_status")
+  analysisNotes    String?          @map("analysis_notes")
+  analyzedBy       String?          @map("analyzed_by")
+  analyzedAt       DateTime?        @map("analyzed_at")
+  createdAt        DateTime         @default(now()) @map("created_at")
+
+  // Relationships
+  lead             Lead             @relation(fields: [leadId], references: [id])
+  analyzer         User?            @relation(fields: [analyzedBy], references: [id])
+
+  @@map("documents")
+}
+
+enum DocumentType {
+  REQUISITORY
+  IDENTITY
+  PROOF_OF_RESIDENCE
+  POWER_OF_ATTORNEY
+  OTHER
+}
+
+enum AnalysisStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  NEEDS_REVIEW
+}
+
+// System Configuration
+model SystemConfig {
+  key         String   @id
+  value       Json
+  description String?
+  updatedBy   String?  @map("updated_by")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relationships
+  updater     User?    @relation(fields: [updatedBy], references: [id])
+
+  @@map("system_config")
+}
+
+// Analytics & Metrics
+model ConversationMetric {
+  id             String       @id @default(uuid())
+  conversationId String       @map("conversation_id")
+  metricType     String       @map("metric_type")
+  value          Decimal      @db.Decimal(10, 4)
+  metadata       Json         @default("{}")
+  recordedAt     DateTime     @default(now()) @map("recorded_at")
+
+  // Relationships
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+
+  @@map("conversation_metrics")
+}
